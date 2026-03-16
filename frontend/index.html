@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Smart Grid Security Dashboard</title>
+    <link rel="stylesheet" href="style.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+    <div id="alert-banner" class="alert-banner hidden">
+        [ FDI ATTACK DETECTED! ]
+    </div>
+
+    <header>
+        <div class="header-container">
+            <h1>Smart Grid Security Monitoring Dashboard</h1>
+            <div id="status-badge" class="badge bg-red">Backend Offline</div>
+        </div>
+    </header>
+
+    <main class="container">
+        <!-- System Stats -->
+        <section class="stats-grid">
+            <div class="card stat-card">
+                <h3>Total Devices</h3>
+                <p id="stat-devices">0</p>
+            </div>
+            <div class="card stat-card">
+                <h3>FDI Attacks Detected</h3>
+                <p id="stat-fdi">0</p>
+            </div>
+            <div class="card stat-card">
+                <h3>Crypto Attacks</h3>
+                <p id="stat-crypto">0</p>
+            </div>
+            <div class="card stat-card">
+                <h3>System Status</h3>
+                <p id="stat-status">Unknown</p>
+            </div>
+        </section>
+
+        <div class="main-grid">
+            <!-- Left Column -->
+            <div class="col">
+                <!-- Chart -->
+                <section class="card">
+                    <h2>Live Energy Consumption Simulation</h2>
+                    <div class="chart-container">
+                        <canvas id="energyChart"></canvas>
+                    </div>
+                </section>
+
+                <!-- Controls -->
+                <section class="card">
+                    <h2>Attack Controls</h2>
+                    <p class="text-muted">Manually trigger attacks to test system resilience.</p>
+                    <div class="btn-group">
+                        <button id="btn-fdi" class="btn btn-primary">Trigger FDI Attack</button>
+                        <button id="btn-tamper" class="btn btn-secondary">Trigger Signature Tampering</button>
+                    </div>
+                </section>
+            </div>
+
+            <!-- Right Column -->
+            <div class="col">
+                <!-- Alerts Panel -->
+                <section class="card">
+                    <h2>Attack Alerts</h2>
+                    <div class="table-container">
+                        <table id="alerts-table">
+                            <thead>
+                                <tr>
+                                    <th>Device ID</th>
+                                    <th>Timestamp</th>
+                                    <th>Severity</th>
+                                    <th>Reason</th>
+                                </tr>
+                            </thead>
+                            <tbody id="alerts-body">
+                                <!-- Alerts will be injected here -->
+                            </tbody>
+                        </table>
+                    </div>
+                </section>
+
+                <!-- Device List -->
+                <section class="card mt-4">
+                    <h2>Active Devices</h2>
+                    <div class="table-container">
+                        <table id="devices-table">
+                            <thead>
+                                <tr>
+                                    <th>Device ID</th>
+                                    <th>Name</th>
+                                    <th>Type</th>
+                                </tr>
+                            </thead>
+                            <tbody id="devices-body">
+                                <!-- Devices will be injected here -->
+                            </tbody>
+                        </table>
+                    </div>
+                </section>
+            </div>
+        </div>
+    </main>
+
+    <script src="script.js"></script>
+</body>
+</html>
