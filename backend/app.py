@@ -26,7 +26,6 @@ init_db()
 # FLASK APP INITIALIZATION
 # ---------------------------------------------------------
 app = Flask(__name__)
-# Enable CORS so the separate React frontend can talk to this local API
 CORS(app)
 
 # Initialize Core System Components
@@ -41,11 +40,6 @@ jwt_mgr = JWTManager()
 # BACKGROUND SIMULATION ENGINE
 # ---------------------------------------------------------
 def simulate():
-    """
-    This function runs continuously in the background.
-    It simulates devices issuing regular consumption readings
-    to the Smart Energy Grid.
-    """
     while True:
         for d in devices.get_all_devices():
             # If the device isn't authenticated, give it a token
@@ -68,7 +62,7 @@ def simulate():
         time.sleep(Config.READING_INTERVAL)
 
 
-# Start the background simulator in a separate Thread so it doesn't block the API
+# Start the background simulator in a separate Thread 
 threading.Thread(target=simulate, daemon=True).start()
 
 
@@ -78,10 +72,6 @@ threading.Thread(target=simulate, daemon=True).start()
 
 @app.route("/api/health")
 def health():
-    """
-    Health Check Endpoint: Used by the UI to verify if the Python backend
-    and MySQL database are online.
-    """
     db_status = "disconnected"
     try:
         conn = get_connection()
@@ -104,7 +94,6 @@ def health():
 
 @app.route("/api/trigger-fdi-attack")
 def trigger_fdi():
-    """Trigger a simulated False Data Injection attack."""
     reading = attack_sim.trigger_fdi_attack()
     result = detector.record(reading)
     return jsonify({
@@ -116,7 +105,6 @@ def trigger_fdi():
 
 @app.route("/api/tamper-signature")
 def tamper_sig():
-    """Trigger a simulated cryptographic signature tampering attack."""
     reading = attack_sim.tamper_signature()
     result = detector.record(reading)
     return jsonify({
@@ -128,7 +116,6 @@ def tamper_sig():
 
 @app.route("/api/trigger-replay-attack")
 def trigger_replay():
-    """Trigger a simulated replay attack (outdated timestamp)."""
     reading = attack_sim.trigger_replay_attack()
     result = detector.record(reading)
     return jsonify({
@@ -140,10 +127,6 @@ def trigger_replay():
 
 @app.route("/api/trigger-jwt-tamper")
 def trigger_jwt_tamper():
-    """
-    Trigger a simulated JWT token tampering attack.
-    Creates a token signed with the wrong key and attempts to verify it.
-    """
     attack_data = attack_sim.trigger_jwt_tamper(jwt_mgr)
     device_id = attack_data["device_id"]
     tampered_token = attack_data["tampered_token"]
@@ -186,7 +169,6 @@ def trigger_jwt_tamper():
 
 @app.route("/api/toggle-defense")
 def toggle_defense():
-    """Toggle the active defense mode on or off."""
     detector.defense_active = not detector.defense_active
     return jsonify({
         "defense_active": detector.defense_active
