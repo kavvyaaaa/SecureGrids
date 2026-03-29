@@ -1,14 +1,7 @@
 # ---------------------------------------------------------
 # FDI (FALSE DATA INJECTION) DETECTOR  –  ML-Enhanced
 # ---------------------------------------------------------
-# Combines two detection strategies:
-#   1. Statistical Z-score anomaly detection (original)
-#   2. Isolation Forest ML model (new) that learns normal
-#      consumption patterns and flags outliers.
-#
-# The ML model trains itself automatically once enough
-# readings have been collected (ML_MIN_TRAINING_SAMPLES).
-# ---------------------------------------------------------
+
 
 import numpy as np
 from sklearn.ensemble import IsolationForest
@@ -18,18 +11,13 @@ from crypto_utils import verify_signature, record_failure
 
 
 class FDIDetector:
-    """
-    FDI (False Data Injection) Detector
-    Uses both Z-score statistics AND an Isolation Forest ML model
-    to identify abnormal energy consumption readings.
-    """
 
     def __init__(self):
         # Per-device rolling window for Z-score baseline
         self.baselines = {}
         # Per-device training data for the ML model
         self._training_data = {}
-        # Per-device trained Isolation Forest models
+        # Per-device trained Isolation
         self._ml_models = {}
         # Track whether defense mode is active
         self.defense_active = True
@@ -40,15 +28,7 @@ class FDIDetector:
     # MAIN ENTRY POINT
     # ---------------------------------------------------------
     def record(self, reading):
-        """
-        Process a new reading:
-          1. Verify its cryptographic signature.
-          2. Record it in the database.
-          3. Run Z-score detection.
-          4. Run ML-based detection.
-          5. If an attack is detected AND defense is active,
-             mark the reading as mitigated.
-        """
+     
         device_id = reading["device_id"]
         value = reading["consumption_kwh"]
         timestamp = reading["timestamp"]
