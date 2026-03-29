@@ -11,6 +11,9 @@ try:
     import mysql.connector
     print("mysql connector installed")
 
+    import sklearn
+    print(f"Scikit-learn: {sklearn.__version__}")
+
     print("\nAll dependencies installed successfully")
 
 except ImportError as e:
