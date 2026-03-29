@@ -1,11 +1,12 @@
 # ---------------------------------------------------------
 # IMPORT REQUIRED LIBRARIES
 # ---------------------------------------------------------
-from flask import Flask, jsonify
+from flask import Flask, jsonify, request
 from flask_cors import CORS
 import threading
 import time
 import random
+from datetime import datetime
 
 # Internal Modules
 from config import Config
@@ -13,8 +14,9 @@ from device_simulator import DeviceManager
 from fdi_detector import FDIDetector
 from auth_manager import AuthManager
 from attack_simulator import AttackSimulator
-from crypto_utils import generate_signature
+from crypto_utils import generate_signature, get_failure_count
 from database import init_db, get_connection
+from jwt_manager import JWTManager
 
 # Initialize Database Architecture automatically
 init_db()
@@ -24,7 +26,7 @@ init_db()
 # FLASK APP INITIALIZATION
 # ---------------------------------------------------------
 app = Flask(__name__)
-# Enable CORS so the separate HTML frontend can talk to this local API
+# Enable CORS so the separate React frontend can talk to this local API
 CORS(app)
 
 # Initialize Core System Components
@@ -32,6 +34,7 @@ devices = DeviceManager()
 detector = FDIDetector()
 auth = AuthManager()
 attack_sim = AttackSimulator(devices)
+jwt_mgr = JWTManager()
 
 
 # ---------------------------------------------------------
@@ -44,7 +47,6 @@ def simulate():
     to the Smart Energy Grid.
     """
     while True:
-        # Loop through all 7 devices
         for d in devices.get_all_devices():
             # If the device isn't authenticated, give it a token
             if not d.token:
@@ -52,13 +54,13 @@ def simulate():
 
             # 2% chance of a random background attack occurring natively
             attack = random.random() < 0.02
-            
+
             # Generate the simulated energy reading
             r = d.get_reading(attack)
-            
+
             # Sign the reading cryptographically
             r["signature"] = generate_signature(r)
-            
+
             # Record reading to our FDI detector (which writes to the database)
             detector.record(r)
 
@@ -71,7 +73,7 @@ threading.Thread(target=simulate, daemon=True).start()
 
 
 # ---------------------------------------------------------
-# API ENDPOINTS (The "Controllers")
+# API ENDPOINTS
 # ---------------------------------------------------------
 
 @app.route("/api/health")
@@ -88,25 +90,112 @@ def health():
         conn.close()
     except:
         pass
-    
+
     return jsonify({
         "status": "running",
-        "database": db_status
+        "database": db_status,
+        "defense_active": detector.defense_active
     })
 
+
+# ---------------------------------------------------------
+# ATTACK TRIGGER ENDPOINTS
+# ---------------------------------------------------------
+
 @app.route("/api/trigger-fdi-attack")
-def trigger():
+def trigger_fdi():
+    """Trigger a simulated False Data Injection attack."""
     reading = attack_sim.trigger_fdi_attack()
-    detector.record(reading)
-    return jsonify(reading)
+    result = detector.record(reading)
+    return jsonify({
+        **reading,
+        "defense_result": result,
+        "timestamp": str(reading["timestamp"])
+    })
 
 
 @app.route("/api/tamper-signature")
-def tamper():
+def tamper_sig():
+    """Trigger a simulated cryptographic signature tampering attack."""
     reading = attack_sim.tamper_signature()
-    detector.record(reading)
-    return jsonify(reading)
+    result = detector.record(reading)
+    return jsonify({
+        **reading,
+        "defense_result": result,
+        "timestamp": str(reading["timestamp"])
+    })
 
+
+@app.route("/api/trigger-replay-attack")
+def trigger_replay():
+    """Trigger a simulated replay attack (outdated timestamp)."""
+    reading = attack_sim.trigger_replay_attack()
+    result = detector.record(reading)
+    return jsonify({
+        **reading,
+        "defense_result": result,
+        "timestamp": str(reading["timestamp"])
+    })
+
+
+@app.route("/api/trigger-jwt-tamper")
+def trigger_jwt_tamper():
+    """
+    Trigger a simulated JWT token tampering attack.
+    Creates a token signed with the wrong key and attempts to verify it.
+    """
+    attack_data = attack_sim.trigger_jwt_tamper(jwt_mgr)
+    device_id = attack_data["device_id"]
+    tampered_token = attack_data["tampered_token"]
+
+    # Attempt verification — this SHOULD fail
+    is_valid, reason = jwt_mgr.verify_token(tampered_token)
+
+    # Log the attempt in the database
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            INSERT INTO jwt_attacks
+            (device_id, attack_type, token_snippet, result)
+            VALUES (%s, %s, %s, %s)
+            """,
+            (device_id, "SIGNATURE_TAMPER",
+             tampered_token[:20] + "...",
+             "BLOCKED" if not is_valid else "BYPASSED")
+        )
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        print(f"[JWT LOG ERROR] {e}")
+
+    return jsonify({
+        "device_id": device_id,
+        "attack_type": "JWT_SIGNATURE_TAMPER",
+        "token_snippet": tampered_token[:30] + "...",
+        "verification_passed": is_valid,
+        "rejection_reason": reason if not is_valid else None,
+        "defense_active": True
+    })
+
+
+# ---------------------------------------------------------
+# DEFENSE TOGGLE
+# ---------------------------------------------------------
+
+@app.route("/api/toggle-defense")
+def toggle_defense():
+    """Toggle the active defense mode on or off."""
+    detector.defense_active = not detector.defense_active
+    return jsonify({
+        "defense_active": detector.defense_active
+    })
+
+
+# ---------------------------------------------------------
+# DATA ENDPOINTS
+# ---------------------------------------------------------
 
 @app.route("/api/devices")
 def get_devices():
@@ -115,7 +204,7 @@ def get_devices():
         cursor = conn.cursor(dictionary=True) if hasattr(conn.cursor(), 'dictionary') else conn.cursor()
         cursor.execute("SELECT device_id, device_name, device_type FROM devices")
         db_devices = cursor.fetchall()
-        
+
         results = []
         for d in db_devices:
             if isinstance(d, dict):
@@ -139,34 +228,39 @@ def get_fdi_alerts():
     try:
         conn = get_connection()
         cursor = conn.cursor(dictionary=True) if hasattr(conn.cursor(), 'dictionary') else conn.cursor()
-        
-        # We need a unified timeline of events for the dashboard
-        # 1. Normal/Attack energy readings
-        # 2. FDI Alerts (handled by the energy_readings is_attack flag conceptually, or specifically from fdi_attacks)
-        # 3. Crypto attacks
-        
+
         query = """
-            SELECT id, device_id, 'NORMAL_READING' as type, CONCAT('Read: ', consumption_kwh, ' kWh') as detail, timestamp
+            SELECT id, device_id, 'NORMAL_READING' as type,
+                   CONCAT('Read: ', consumption_kwh, ' kWh') as detail,
+                   timestamp
             FROM energy_readings
             WHERE is_attack = 0
-            
+
             UNION ALL
-            
-            SELECT id, device_id, 'FDI_ATTACK' as type, detection_reason as detail, timestamp
+
+            SELECT id, device_id, 'FDI_ATTACK' as type,
+                   detection_reason as detail, timestamp
             FROM fdi_attacks
-            
+
             UNION ALL
-            
-            SELECT id, device_id, 'CRYPTO_ATTACK' as type, verification_status as detail, timestamp
+
+            SELECT id, device_id, 'CRYPTO_ATTACK' as type,
+                   verification_status as detail, timestamp
             FROM crypto_attacks
-            
+
+            UNION ALL
+
+            SELECT id, device_id, 'JWT_ATTACK' as type,
+                   CONCAT(attack_type, ': ', result) as detail, timestamp
+            FROM jwt_attacks
+
             ORDER BY timestamp DESC
             LIMIT 50
         """
-        
+
         cursor.execute(query)
         events = cursor.fetchall()
-        
+
         results = []
         for e in events:
             if isinstance(e, dict):
@@ -198,36 +292,42 @@ def get_security_dashboard():
     try:
         conn = get_connection()
         cursor = conn.cursor(dictionary=True) if hasattr(conn.cursor(), 'dictionary') else conn.cursor()
-        
-        cursor.execute("SELECT COUNT(*) FROM devices")
-        total_devices = cursor.fetchone()
-        total_devices = total_devices['COUNT(*)'] if isinstance(total_devices, dict) else total_devices[0]
 
-        cursor.execute("SELECT COUNT(*) FROM fdi_attacks")
-        fdi_count_total = cursor.fetchone()
-        fdi_count_total = fdi_count_total['COUNT(*)'] if isinstance(fdi_count_total, dict) else fdi_count_total[0]
+        def fetch_count(query):
+            cursor.execute(query)
+            row = cursor.fetchone()
+            return row['COUNT(*)'] if isinstance(row, dict) else row[0]
 
-        cursor.execute("SELECT COUNT(*) FROM crypto_attacks")
-        crypto_count_total = cursor.fetchone()
-        crypto_count_total = crypto_count_total['COUNT(*)'] if isinstance(crypto_count_total, dict) else crypto_count_total[0]
-        
-        # Check if an attack has occurred in the last 15 seconds to trigger "Under Attack"
-        cursor.execute("SELECT COUNT(*) FROM fdi_attacks WHERE timestamp >= NOW() - INTERVAL 15 SECOND")
-        recent_fdi = cursor.fetchone()
-        recent_fdi = recent_fdi['COUNT(*)'] if isinstance(recent_fdi, dict) else recent_fdi[0]
-        
-        cursor.execute("SELECT COUNT(*) FROM crypto_attacks WHERE timestamp >= NOW() - INTERVAL 15 SECOND")
-        recent_crypto = cursor.fetchone()
-        recent_crypto = recent_crypto['COUNT(*)'] if isinstance(recent_crypto, dict) else recent_crypto[0]
-        
-        is_under_attack = (recent_fdi > 0 or recent_crypto > 0)
-        
+        total_devices = fetch_count("SELECT COUNT(*) FROM devices")
+        fdi_count = fetch_count("SELECT COUNT(*) FROM fdi_attacks")
+        crypto_count = fetch_count("SELECT COUNT(*) FROM crypto_attacks")
+        jwt_count = fetch_count("SELECT COUNT(*) FROM jwt_attacks")
+        mitigated_count = fetch_count(
+            "SELECT COUNT(*) FROM fdi_attacks WHERE mitigated = 1"
+        )
+        recent_fdi = fetch_count(
+            "SELECT COUNT(*) FROM fdi_attacks WHERE timestamp >= NOW() - INTERVAL 15 SECOND"
+        )
+        recent_crypto = fetch_count(
+            "SELECT COUNT(*) FROM crypto_attacks WHERE timestamp >= NOW() - INTERVAL 15 SECOND"
+        )
+        recent_jwt = fetch_count(
+            "SELECT COUNT(*) FROM jwt_attacks WHERE timestamp >= NOW() - INTERVAL 15 SECOND"
+        )
+
+        is_under_attack = (recent_fdi > 0 or recent_crypto > 0 or recent_jwt > 0)
+
         return jsonify({
             "total_devices": total_devices,
-            "fdi_attacks_detected": fdi_count_total,
-            "crypto_failures": crypto_count_total,
+            "fdi_attacks_detected": fdi_count,
+            "crypto_failures": crypto_count,
+            "jwt_attacks": jwt_count,
+            "fdi_mitigated": mitigated_count,
             "status": "Under Attack" if is_under_attack else "Secure",
-            "recent_fdi": recent_fdi
+            "defense_active": detector.defense_active,
+            "recent_fdi": recent_fdi,
+            "recent_crypto": recent_crypto,
+            "recent_jwt": recent_jwt
         })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -236,8 +336,16 @@ def get_security_dashboard():
             conn.close()
 
 
-if __name__ == "__main__":
+@app.route("/api/ml-status")
+def get_ml_status():
+    """Return the current state of the ML models for each device."""
+    return jsonify(detector.get_ml_status())
 
+
+# ---------------------------------------------------------
+# START THE SERVER
+# ---------------------------------------------------------
+if __name__ == "__main__":
     app.run(
         host=Config.HOST,
         port=Config.PORT,
