@@ -7,11 +7,7 @@ from database import get_connection
 
 
 class SmartMeter:
-    """
-    Simulates a single physical Smart Energy Meter in a household or business.
-    Each meter has a base energy consumption it hovers around.
-    """
-
+   
     def __init__(self, device_id, name, device_type):
 
         self.device_id = device_id
@@ -22,19 +18,13 @@ class SmartMeter:
         self.token = None # Authentication token
 
     def generate_normal_consumption(self):
-        """
-        Generates a normal reading with a tiny bit of random variance (noise) 
-        so the simulation looks organic and realistic.
-        """
+       
         multiplier = random.uniform(0.8, 1.2)
         noise = np.random.normal(0, 2)
         return round(self.base_consumption * multiplier + noise, 2)
 
     def generate_fdi_attack(self):
-        """
-        Simulates an attacker hijacking the meter and sending absurdly high 
-        or low readings to trick the power grid.
-        """
+        
         m1, m2 = Config.FDI_MULTIPLIER_RANGE
 
         return round(self.base_consumption * random.uniform(m1, m2), 2)
